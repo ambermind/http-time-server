@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2024, Sylvain Huet, Ambermind
+// Minimacy (r) Demonstration
+
+// Demonstration: utc time server with 4 outputs: text, json, digital (png), analog (png)
+// Topics: http server, time, json, png, drawing, floating numbers
+
+use core.net.http.srv;;
+use core.util.json;;
+use core.2d.font;;
+use core.2d.png;;
+use core.2d.png.maker;;
+
+// a font is needed for digital output
+const Font=fontFromBitmap(bitmapFromPng(load("rsc/fonts/Arial_32_256.png")));;
+
+// text output : http://127.0.0.1:1234
+fun timeText(h) = strBuild([
+	fullDate(time()),
+	"<br>Alternative views: <a href=\"json\">json</a> <a href=\"analog\">analog</a> <a href=\"digital\">digital</a>"
+]);;
+
+// json output : http://127.0.0.1:1234/json
+fun timeJson(h) =
+	httpSrvSetHeader(h, "Content-Type", "application/json");
+	let time() -> t in
+	let date(t) -> [year, month, day, weekDay, hour, minute, second] in
+	jsonEncodePretty(
+		jsonObject
+			["timestamp", jsonInt(t)]::
+			["year", jsonInt(year)]::
+			["month", jsonInt(month)]::
+			["day", jsonInt(day)]::
+			["weekDay", jsonInt(weekDay)]::
+			["hour", jsonInt(hour)]::
+			["minute", jsonInt(minute)]::
+			["second", jsonInt(second)]::
+			nil);;
+
+// digital output : http://127.0.0.1:1234/digital
+fun timeDigital(h) =
+	httpSrvSetHeader(h, "Content-Type", "image/png");
+	let bitmapCreate(500, 40, 0xe0e0e0) -> bmp in (
+		bitmapText(bmp, 250, 20, ALIGN_CENTER|ALIGN_MIDDLE, fullDate(time()), Font, 0x404040, nil);
+		pngFromBitmap(bmp, false)
+	);;
+
+
+// analog output : http://127.0.0.1:1234/analog
+
+// coordinates transformation, from angular to xy
+fun _xyCoordinates(scale, alpha) = [200 + intFromFloat(scale *. sin(alpha)), 200 - intFromFloat(scale *. cos(alpha))];;
+
+// hands are drawn as green triangles
+fun _drawHand(bmp, scale, alpha) =
+	let _xyCoordinates(scale, alpha) -> [x1, y1] in
+	let _xyCoordinates(20., alpha+. 3.) -> [x2, y2] in
+	let _xyCoordinates(20., alpha-. 3.) -> [x3, y3] in (
+		bitmapLine(bmp, x1, y1, x2, y2, 0x00ff00, nil);
+		bitmapLine(bmp, x2, y2, x3, y3, 0x00ff00, nil);
+		bitmapLine(bmp, x3, y3, x1, y1, 0x00ff00, nil)
+	);;
+
+fun timeAnalog(h) =
+	httpSrvSetHeader(h, "Content-Type", "image/png");
+	let date(time()) -> [year, month, day, weekDay, hour, minute, second] in
+	let floatFromInt(minute)*. 2. *. pi /. 60. -> minute in	// convert minutes to radiant angle
+	let floatFromInt(hour)*. 2. *. pi /. 12. +. (minute /. 12.) -> hour in	// convert hours to radiant angle
+	let bitmapCreate(400, 400, 0x404040) -> bmp in (
+		bitmapCircle(bmp, 20, 20, 360, 360, 0x00ff00, nil);
+		_drawHand(bmp, 100., hour);
+		_drawHand(bmp, 150., minute);
+		pngFromBitmap(bmp, false)
+	);;
+
+// main function, starts the local http server
+fun main()=
+	let 1234 -> port in
+    let httpSrvStart(
+		nil,	// no tls key => we use http
+		nil,	// no ip local address => the server is bound to all local addresses
+		port,
+		lambda(h, verb, uri)=
+			match uri with	// call the rendering function depending on the uri. Each rendering functions returns a string
+				"/" -> timeText(h),
+				"/json" -> timeJson(h),
+				"/digital" -> timeDigital(h),
+				"/analog" -> timeAnalog(h)
+		) -> httpsrv in
+	echoLn if httpsrv==nil then "Cannot start http server"
+		else strFormat("Local http server started on port *. Open http://127.0.0.1:*", port, port);;
